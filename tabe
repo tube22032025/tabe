@@ -11,8 +11,9 @@ fi
 apt update
 apt install -y python3-pip python3-flask python3-apscheduler cron
 
-# Cài đặt pytubefix
-pip install pytubefix --break-system-packages
+# Cài đặt pytubefix - thử các phương pháp khác nhau
+echo "Đang cài đặt pytubefix..."
+pip install pytubefix || pip install --user pytubefix || pip3 install pytubefix
 
 # Tạo file youtube.py
 echo "Tạo file youtube.py..."
@@ -23,9 +24,28 @@ echo "Tạo thư mục templates và file index.html..."
 mkdir -p templates
 curl -s https://raw.githubusercontent.com/tube22032025/tube/refs/heads/main/index.html > templates/index.html
 
+# Tạo file xoa-mp4.py
+cat > xoa-mp4.py << EOL
+import os
+import time
+
+def delete_mp4_files():
+    directory = "/root"
+    for filename in os.listdir(directory):
+        if filename.endswith(".mp4"):
+            file_path = os.path.join(directory, filename)
+            os.remove(file_path)
+            print(f"Đã xóa file: {file_path}")
+
+while True:
+    delete_mp4_files()
+    time.sleep(60)  # Chờ 60 giây trước khi chạy lại
+EOL
+
 # Cấu hình crontab
 echo "Cấu hình crontab..."
 (crontab -l 2>/dev/null | grep -v "youtube.py"; echo "@reboot /usr/bin/python3 /root/youtube.py") | crontab -
+(crontab -l 2>/dev/null | grep -v "xoa-mp4.py"; echo "@reboot /usr/bin/python3 /root/xoa-mp4.py") | crontab -
 
 # Chạy youtube.py
 echo "Chạy youtube.py..."
