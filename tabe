@@ -7,7 +7,12 @@ if [ "$(id -u)" != "0" ]; then
    exit
 fi
 
+# Xác định thư mục hiện tại để sử dụng trong crontab
+CURRENT_DIR=$(pwd)
+echo "Thư mục hiện tại: $CURRENT_DIR"
+
 # Cập nhật và cài đặt các gói cần thiết
+echo "Cập nhật và cài đặt các gói cần thiết..."
 apt update
 apt install -y python3-pip python3-flask python3-apscheduler cron
 
@@ -19,33 +24,61 @@ pip install pytubefix || pip install --user pytubefix || pip3 install pytubefix
 echo "Tạo file youtube.py..."
 curl -s https://raw.githubusercontent.com/tube22032025/tube/refs/heads/main/tube.py > youtube.py
 
+# Đảm bảo file có quyền thực thi
+echo "Cấp quyền thực thi cho file..."
+chmod +x youtube.py
+
 # Tạo thư mục templates và file index.html
 echo "Tạo thư mục templates và file index.html..."
 mkdir -p templates
 curl -s https://raw.githubusercontent.com/tube22032025/tube/refs/heads/main/index.html > templates/index.html
 
-# Tạo file xoa-mp4.py
-cat > xoa-mp4.py << EOL
-import os
-import time
+# Thêm shebang vào đầu file youtube.py nếu chưa có
+if ! grep -q "^#!/usr/bin/python3" youtube.py; then
+    sed -i '1i#!/usr/bin/python3' youtube.py
+    echo "Đã thêm shebang vào youtube.py"
+fi
 
-def delete_mp4_files():
-    directory = "/root"
-    for filename in os.listdir(directory):
-        if filename.endswith(".mp4"):
-            file_path = os.path.join(directory, filename)
-            os.remove(file_path)
-            print(f"Đã xóa file: {file_path}")
+# Cấu hình crontab với đường dẫn đầy đủ
+echo "Cấu hình crontab với đường dẫn: $CURRENT_DIR"
+(crontab -l 2>/dev/null | grep -v "youtube.py"; echo "@reboot /usr/bin/python3 $CURRENT_DIR/youtube.py >> $CURRENT_DIR/youtube_cron.log 2>&1") | crontab -
 
-while True:
-    delete_mp4_files()
-    time.sleep(60)  # Chờ 60 giây trước khi chạy lại
+# Kiểm tra crontab
+echo "Crontab đã được cấu hình:"
+crontab -l
+
+# Kiểm tra quyền truy cập của người dùng với cron
+if [ -f /etc/cron.deny ]; then
+    if grep -q "$(whoami)" /etc/cron.deny; then
+        echo "CẢNH BÁO: Người dùng $(whoami) bị cấm sử dụng cron trong /etc/cron.deny"
+    fi
+fi
+
+if [ -f /etc/cron.allow ]; then
+    if ! grep -q "$(whoami)" /etc/cron.allow; then
+        echo "CẢNH BÁO: Người dùng $(whoami) không được phép sử dụng cron trong /etc/cron.allow"
+    fi
+fi
+
+# Kiểm tra xem cron service có đang chạy không
+if ! systemctl is-active --quiet cron; then
+    echo "CẢNH BÁO: Dịch vụ cron không hoạt động. Đang kích hoạt..."
+    systemctl enable cron
+    systemctl start cron
+fi
+
+# Tạo file test để kiểm tra cron
+echo "Tạo file test để kiểm tra cron..."
+cat > test_cron.sh << EOL
+#!/bin/bash
+echo "Cron test executed at \$(date)" >> $CURRENT_DIR/cron_test.log
 EOL
+chmod +x test_cron.sh
 
-# Cấu hình crontab
-echo "Cấu hình crontab..."
-(crontab -l 2>/dev/null | grep -v "youtube.py"; echo "@reboot /usr/bin/python3 /root/youtube.py") | crontab -
-(crontab -l 2>/dev/null | grep -v "xoa-mp4.py"; echo "@reboot /usr/bin/python3 /root/xoa-mp4.py") | crontab -
+# Thêm test vào crontab
+(crontab -l 2>/dev/null | grep -v "test_cron.sh"; echo "* * * * * $CURRENT_DIR/test_cron.sh") | crontab -
+
+echo "Đã thêm test cron job. Kiểm tra file cron_test.log sau 1 phút để xác nhận cron đang hoạt động."
 
 # Chạy youtube.py
 echo "Chạy youtube.py..."
