@@ -1,0 +1,32 @@
+#!/bin/bash
+
+# Kiểm tra và chuyển sang quyền root nếu cần
+if [ "$(id -u)" != "0" ]; then
+   echo "Chuyển sang quyền root..."
+   exec sudo su -c "$0"
+   exit
+fi
+
+# Cập nhật và cài đặt các gói cần thiết
+apt update
+apt install -y python3-pip python3-flask python3-apscheduler cron
+
+# Cài đặt pytubefix
+pip install pytubefix --break-system-packages
+
+# Tạo file youtube.py
+echo "Tạo file youtube.py..."
+curl -s https://raw.githubusercontent.com/tube22032025/tube/refs/heads/main/tube.py > youtube.py
+
+# Tạo thư mục templates và file index.html
+echo "Tạo thư mục templates và file index.html..."
+mkdir -p templates
+curl -s https://raw.githubusercontent.com/tube22032025/tube/refs/heads/main/index.html > templates/index.html
+
+# Cấu hình crontab
+echo "Cấu hình crontab..."
+(crontab -l 2>/dev/null | grep -v "youtube.py"; echo "@reboot /usr/bin/python3 /root/youtube.py") | crontab -
+
+# Chạy youtube.py
+echo "Chạy youtube.py..."
+python3 youtube.py
