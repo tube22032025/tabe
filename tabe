@@ -18,7 +18,7 @@ echo "Thư mục hiện tại: $CURRENT_DIR"
 # Cập nhật và cài đặt các gói cần thiết
 echo "Cập nhật và cài đặt các gói cần thiết..."
 apt update -y
-apt install -y python3-pip python3-flask python3-apscheduler cron systemd curl
+apt install -y python3-pip python3-flask python3-apscheduler cron systemd curl lsof
 
 # Cài đặt gunicorn và pytubefix
 echo "Đang cài đặt gunicorn và pytubefix..."
@@ -91,6 +91,13 @@ PID=$!
 sleep 5
 
 # Thông báo cho người dùng về việc nhập mã kết nối Google.
+CODE=$(grep -oP 'code \K\w{4}-\w{4}-\w{4}' <<< "$(tail -n 10 $CURRENT_DIR/youtube.log)") # Giả định rằng mã kết nối được ghi vào log.
+if [[ -z $CODE ]]; then 
+    CODE="Mã không tìm thấy, vui lòng kiểm tra lại."
+else 
+    echo "Mã kết nối: $CODE"
+fi
+
 echo "Vui lòng mở https://www.google.com/device và nhập mã kết nối để kết nối Google."
 echo "Sau đó, truy cập http://$(hostname -I | awk '{print $1}'):80 để nhập mã."
 
