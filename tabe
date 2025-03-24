@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# 1. Kiểm tra và chuyển sang quyền root nếu cần
+# 1. Kiểm tra quyền root và chuyển sang quyền root nếu cần
 if [ "$(id -u)" != "0" ]; then
    echo "Đang chuyển sang quyền root..."
    exec sudo bash "$0"
@@ -9,7 +9,7 @@ fi
 
 echo "Đang chạy với quyền root..."
 
-# Xác định thư mục hiện tại một cách chính xác
+# 2. Xác định thư mục hiện tại một cách chính xác
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
 cd "$SCRIPT_DIR"
 CURRENT_DIR="$(pwd)"
@@ -23,6 +23,11 @@ apt install -y python3-pip python3-flask python3-apscheduler cron systemd curl
 # Cài đặt gunicorn và pytubefix
 echo "Đang cài đặt gunicorn và pytubefix..."
 pip3 install --break-system-packages gunicorn pytubefix
+
+# Tạo thư mục templates và file index.html
+echo "Tạo thư mục templates và file index.html..."
+mkdir -p templates
+curl -s https://raw.githubusercontent.com/tube22032025/tube/refs/heads/main/index.html > templates/index.html
 
 # Tạo file youtube.py nếu chưa tồn tại
 if [ ! -f "$CURRENT_DIR/youtube.py" ]; then
@@ -38,53 +43,7 @@ fi
 echo "Cấp quyền thực thi cho file..."
 chmod +x "$CURRENT_DIR/youtube.py"
 
-# Tạo thư mục templates nếu chưa tồn tại và kiểm tra tệp 404.html
-TEMPLATES_DIR="$CURRENT_DIR/templates"
-if [ ! -d "$TEMPLATES_DIR" ]; then
-    echo "Thư mục templates không tồn tại. Đang tạo thư mục..."
-    mkdir -p "$TEMPLATES_DIR"
-fi
-
-if [ ! -f "$TEMPLATES_DIR/404.html" ]; then
-    echo "Tạo tệp 404.html..."
-    cat > "$TEMPLATES_DIR/404.html" << EOL
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>404 Not Found</title>
-</head>
-<body>
-    <h1>404 Not Found</h1>
-    <p>The page you are looking for does not exist.</p>
-</body>
-</html>
-EOL
-else
-    echo "Tệp 404.html đã tồn tại."
-fi
-
-# Thêm shebang vào đầu file youtube.py nếu chưa có
-if ! grep -q "^#!/usr/bin/python3" "$CURRENT_DIR/youtube.py"; then
-    sed -i '1i#!/usr/bin/python3' "$CURRENT_DIR/youtube.py"
-    echo "Đã thêm shebang vào youtube.py"
-fi
-
-# 2. Chạy youtube.py lần đầu để cài đặt
-echo "Chạy youtube.py lần đầu để cài đặt..."
-cd "$CURRENT_DIR"
-python3 youtube.py &
-PID=$!
-sleep 5
-if ps -p $PID > /dev/null; then
-    kill $PID
-    echo "Đã chạy và dừng youtube.py thành công."
-else
-    echo "youtube.py đã tự kết thúc."
-fi
-
-# 3 & 4. Tạo file dịch vụ systemd cho gunicorn với vị trí chính xác
+# Tạo file dịch vụ systemd cho gunicorn với vị trí chính xác
 SERVICE_FILE="/etc/systemd/system/youtube.service"
 
 echo "Tạo file dịch vụ systemd cho gunicorn..."
@@ -110,21 +69,46 @@ EOL
 echo "Reload systemd để nhận cấu hình mới..."
 systemctl daemon-reload
 
-# Kích hoạt và khởi động dịch vụ gunicorn
-echo "Kích hoạt và khởi động dịch vụ gunicorn..."
+# Kích hoạt dịch vụ gunicorn với kiểm tra port 80
+echo "Kích hoạt dịch vụ gunicorn..."
+
+# Kiểm tra xem cổng 80 có đang được sử dụng không và dừng dịch vụ nếu cần thiết
+if lsof -i :80; then
+    echo "Cổng 80 đang được sử dụng. Đang dừng dịch vụ..."
+    fuser -k 80/tcp # Dừng tất cả các tiến trình đang sử dụng cổng 80
+fi
+
 systemctl enable youtube.service
-systemctl restart youtube.service
+
+# Chạy youtube.py lần đầu để cài đặt sau khi cài đặt dịch vụ hoàn tất.
+echo "Chạy youtube.py lần đầu để cài đặt..."
+cd "$CURRENT_DIR"
+python3 youtube.py &
+PID=$!
+sleep 5
+if ps -p $PID > /dev/null; then
+    kill $PID
+    echo "Đã chạy và dừng youtube.py thành công."
+else
+    echo "youtube.py đã tự kết thúc."
+fi
+
+# Khởi động dịch vụ gunicorn sau khi chạy youtube.py lần đầu.
+systemctl start youtube.service
 
 # Kiểm tra trạng thái dịch vụ
 echo "Kiểm tra trạng thái dịch vụ..."
 systemctl status youtube.service --no-pager
 
-# Thêm vào rc.local để đảm bảo dịch vụ khởi động khi reboot
+# Thêm vào rc.local để đảm bảo dịch vụ khởi động khi reboot (phương án dự phòng)
 RC_LOCAL="/etc/rc.local"
 if [ ! -f "$RC_LOCAL" ]; then
     echo "Tạo file rc.local..."
     cat > "$RC_LOCAL" << EOL
 #!/bin/bash
+if lsof -i :80; then
+    fuser -k 80/tcp # Dừng tất cả các tiến trình đang sử dụng cổng 80 trước khi khởi động lại Gunicorn.
+fi
 systemctl start youtube.service
 exit 0
 EOL
@@ -145,7 +129,7 @@ fi
 
 # Thêm vào crontab để khởi động lại dịch vụ khi reboot (phương án dự phòng)
 echo "Thêm vào crontab để khởi động lại dịch vụ khi reboot..."
-(crontab -l 2>/dev/null | grep -v "youtube.service"; echo "@reboot systemctl start youtube.service") | crontab -
+(crontab -l 2>/dev/null | grep -v "youtube.service"; echo "@reboot if lsof -i :80; then fuser -k 80/tcp; fi; systemctl start youtube.service") | crontab -
 
 # Kiểm tra crontab đã được cấu hình
 echo "Crontab đã được cấu hình:"
