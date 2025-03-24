@@ -86,6 +86,14 @@ cd "$CURRENT_DIR"
 python3 youtube.py &
 PID=$!
 sleep 5
+
+# Thông báo cho người dùng về việc nhập mã kết nối Google.
+echo "Vui lòng mở https://www.google.com/device và nhập mã kết nối để kết nối Google."
+echo "Nhấn Enter khi bạn đã hoàn tất."
+
+# Chờ người dùng nhấn Enter trước khi tiếp tục.
+read -r _
+
 if ps -p $PID > /dev/null; then
     kill $PID
     echo "Đã chạy và dừng youtube.py thành công."
