@@ -1,35 +1,42 @@
 #!/bin/bash
 
-# Kiểm tra và chuyển sang quyền root nếu cần
+# 1. Kiểm tra và chuyển sang quyền root nếu cần
 if [ "$(id -u)" != "0" ]; then
-   echo "Chuyển sang quyền root..."
-   exec sudo "$0"
-   exit
+   echo "Đang chuyển sang quyền root..."
+   exec sudo bash "$0"
+   exit 1
 fi
 
-# Xác định thư mục hiện tại để sử dụng trong crontab
-CURRENT_DIR=$(pwd)
+echo "Đang chạy với quyền root..."
+
+# Xác định thư mục hiện tại một cách chính xác
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
+cd "$SCRIPT_DIR"
+CURRENT_DIR="$(pwd)"
 echo "Thư mục hiện tại: $CURRENT_DIR"
 
 # Cập nhật và cài đặt các gói cần thiết
 echo "Cập nhật và cài đặt các gói cần thiết..."
-apt update
-apt install -y python3-pip python3-flask python3-apscheduler cron
+apt update -y
+apt install -y python3-pip python3-flask python3-apscheduler cron systemd curl
 
-# Cài đặt gunicorn và pytubefix với --break-system-packages
-echo "Đang cài đặt gunicorn..."
-pip install --break-system-packages gunicorn
+# Cài đặt gunicorn và pytubefix
+echo "Đang cài đặt gunicorn và pytubefix..."
+pip3 install --break-system-packages gunicorn pytubefix
 
-echo "Đang cài đặt pytubefix..."
-pip install --break-system-packages pytubefix
-
-# Tạo file youtube.py
-echo "Tạo file youtube.py..."
-curl -s https://raw.githubusercontent.com/tube22032025/tube/refs/heads/main/tube.py -o youtube.py
+# Tạo file youtube.py nếu chưa tồn tại
+if [ ! -f "$CURRENT_DIR/youtube.py" ]; then
+    echo "Tạo file youtube.py..."
+    curl -s https://raw.githubusercontent.com/tube22032025/tube/refs/heads/main/tube.py -o "$CURRENT_DIR/youtube.py"
+else
+    echo "File youtube.py đã tồn tại, đang cập nhật..."
+    curl -s https://raw.githubusercontent.com/tube22032025/tube/refs/heads/main/tube.py -o "$CURRENT_DIR/youtube.py.new"
+    mv "$CURRENT_DIR/youtube.py.new" "$CURRENT_DIR/youtube.py"
+fi
 
 # Đảm bảo file có quyền thực thi
 echo "Cấp quyền thực thi cho file..."
-chmod +x youtube.py
+chmod +x "$CURRENT_DIR/youtube.py"
 
 # Tạo thư mục templates nếu chưa tồn tại và kiểm tra tệp 404.html
 TEMPLATES_DIR="$CURRENT_DIR/templates"
@@ -39,7 +46,7 @@ if [ ! -d "$TEMPLATES_DIR" ]; then
 fi
 
 if [ ! -f "$TEMPLATES_DIR/404.html" ]; then
-    echo "Tệp 404.html không tồn tại trong thư mục templates. Đang tạo tệp 404.html..."
+    echo "Tạo tệp 404.html..."
     cat > "$TEMPLATES_DIR/404.html" << EOL
 <!DOCTYPE html>
 <html lang="en">
@@ -55,50 +62,96 @@ if [ ! -f "$TEMPLATES_DIR/404.html" ]; then
 </html>
 EOL
 else
-    echo "Tệp 404.html đã tồn tại trong thư mục templates."
+    echo "Tệp 404.html đã tồn tại."
 fi
 
 # Thêm shebang vào đầu file youtube.py nếu chưa có
-if ! grep -q "^#!/usr/bin/python3" youtube.py; then
-    sed -i '1i#!/usr/bin/python3' youtube.py
+if ! grep -q "^#!/usr/bin/python3" "$CURRENT_DIR/youtube.py"; then
+    sed -i '1i#!/usr/bin/python3' "$CURRENT_DIR/youtube.py"
     echo "Đã thêm shebang vào youtube.py"
 fi
 
-# Cấu hình crontab với đường dẫn đầy đủ đến youtube.py
-echo "Cấu hình crontab với đường dẫn: $CURRENT_DIR"
-(crontab -l 2>/dev/null | grep -v "youtube.py"; echo "@reboot /usr/local/bin/gunicorn --workers 4 --bind 0.0.0.0:80 $CURRENT_DIR/youtube.py:app >> /root/youtube_cron.log 2>&1") | crontab -
-(crontab -l 2>/dev/null | grep -v "test_cron.sh"; echo "* * * * * $CURRENT_DIR/test_cron.sh") | crontab -
+# 2. Chạy youtube.py lần đầu để cài đặt
+echo "Chạy youtube.py lần đầu để cài đặt..."
+cd "$CURRENT_DIR"
+python3 youtube.py &
+PID=$!
+sleep 5
+if ps -p $PID > /dev/null; then
+    kill $PID
+    echo "Đã chạy và dừng youtube.py thành công."
+else
+    echo "youtube.py đã tự kết thúc."
+fi
 
-# Kiểm tra crontab
+# 3 & 4. Tạo file dịch vụ systemd cho gunicorn với vị trí chính xác
+SERVICE_FILE="/etc/systemd/system/youtube.service"
+
+echo "Tạo file dịch vụ systemd cho gunicorn..."
+cat > "$SERVICE_FILE" << EOL
+[Unit]
+Description=Gunicorn instance to serve Youtube App
+After=network.target
+
+[Service]
+User=root
+Group=www-data
+WorkingDirectory=$CURRENT_DIR
+Environment="PATH=/usr/bin:/usr/local/bin"
+ExecStart=/usr/local/bin/gunicorn --workers 4 --bind 0.0.0.0:80 youtube:app
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOL
+
+# Reload systemd để nhận cấu hình mới
+echo "Reload systemd để nhận cấu hình mới..."
+systemctl daemon-reload
+
+# Kích hoạt và khởi động dịch vụ gunicorn
+echo "Kích hoạt và khởi động dịch vụ gunicorn..."
+systemctl enable youtube.service
+systemctl restart youtube.service
+
+# Kiểm tra trạng thái dịch vụ
+echo "Kiểm tra trạng thái dịch vụ..."
+systemctl status youtube.service --no-pager
+
+# Thêm vào rc.local để đảm bảo dịch vụ khởi động khi reboot
+RC_LOCAL="/etc/rc.local"
+if [ ! -f "$RC_LOCAL" ]; then
+    echo "Tạo file rc.local..."
+    cat > "$RC_LOCAL" << EOL
+#!/bin/bash
+systemctl start youtube.service
+exit 0
+EOL
+    chmod +x "$RC_LOCAL"
+else
+    if ! grep -q "systemctl start youtube.service" "$RC_LOCAL"; then
+        # Thêm lệnh trước dòng "exit 0" nếu có
+        if grep -q "exit 0" "$RC_LOCAL"; then
+            sed -i '/exit 0/i systemctl start youtube.service' "$RC_LOCAL"
+        else
+            # Nếu không có "exit 0", thêm vào cuối file
+            echo "systemctl start youtube.service" >> "$RC_LOCAL"
+            echo "exit 0" >> "$RC_LOCAL"
+        fi
+        chmod +x "$RC_LOCAL"
+    fi
+fi
+
+# Thêm vào crontab để khởi động lại dịch vụ khi reboot (phương án dự phòng)
+echo "Thêm vào crontab để khởi động lại dịch vụ khi reboot..."
+(crontab -l 2>/dev/null | grep -v "youtube.service"; echo "@reboot systemctl start youtube.service") | crontab -
+
+# Kiểm tra crontab đã được cấu hình
 echo "Crontab đã được cấu hình:"
 crontab -l
 
-# Kiểm tra quyền truy cập của người dùng với cron
-if [ -f /etc/cron.deny ]; then
-    if grep -q "$(whoami)" /etc/cron.deny; then
-        echo "CẢNH BÁO: Người dùng $(whoami) bị cấm sử dụng cron trong /etc/cron.deny"
-    fi
-fi
-
-if [ -f /etc/cron.allow ]; then
-    if ! grep -q "$(whoami)" /etc/cron.allow; then
-        echo "CẢNH BÁO: Người dùng $(whoami) không được phép sử dụng cron trong /etc/cron.allow"
-    fi
-fi
-
-# Kiểm tra xem cron service có đang chạy không
-if ! systemctl is-active --quiet cron; then
-    echo "CẢNH BÁO: Dịch vụ cron không hoạt động. Đang kích hoạt..."
-    systemctl enable cron
-    systemctl start cron
-fi
-
-# Tạo file test để kiểm tra cron
-echo "Tạo file test để kiểm tra cron..."
-cat > test_cron.sh << EOL
-#!/bin/bash
-echo "Cron test executed at \$(date)" >> $CURRENT_DIR/cron_test.log
-EOL
-chmod +x test_cron.sh
-
-echo "Đã thêm test cron job. Kiểm tra file cron_test.log sau 1 phút để xác nhận cron đang hoạt động."
+echo "==================================================="
+echo "Cài đặt hoàn tất. Dịch vụ youtube đã được cấu hình để tự khởi động khi VPS khởi động."
+echo "Dịch vụ đang chạy tại địa chỉ: http://$(hostname -I | awk '{print $1}'):80"
+echo "==================================================="
