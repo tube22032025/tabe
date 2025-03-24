@@ -29,6 +29,9 @@ echo "Tạo thư mục templates và file index.html..."
 mkdir -p templates
 curl -s https://raw.githubusercontent.com/tube22032025/tube/refs/heads/main/index.html > templates/index.html
 
+# Tạo file templates/404.html
+echo "<h1>404 Not Found</h1><p>Trang bạn yêu cầu không tồn tại.</p>" > templates/404.html
+
 # Tạo file youtube.py nếu chưa tồn tại
 if [ ! -f "$CURRENT_DIR/youtube.py" ]; then
     echo "Tạo file youtube.py..."
@@ -89,10 +92,7 @@ sleep 5
 
 # Thông báo cho người dùng về việc nhập mã kết nối Google.
 echo "Vui lòng mở https://www.google.com/device và nhập mã kết nối để kết nối Google."
-echo "Nhấn Enter khi bạn đã hoàn tất."
-
-# Chờ người dùng nhấn Enter trước khi tiếp tục.
-read -r _
+echo "Sau đó, truy cập http://$(hostname -I | awk '{print $1}'):80 để nhập mã."
 
 if ps -p $PID > /dev/null; then
     kill $PID
