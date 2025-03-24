@@ -1,5 +1,18 @@
 #!/bin/bash
 
+# Hàm xử lý lỗi
+error_exit() {
+    echo "Lỗi: $1" >&2
+    exit 1
+}
+
+# Hàm kiểm tra kết quả lệnh
+check_command() {
+    if [ $? -ne 0 ]; then
+        error_exit "$1"
+    fi
+}
+
 # 1. Kiểm tra quyền root và chuyển sang quyền root nếu cần
 if [ "$(id -u)" != "0" ]; then
    echo "Đang chuyển sang quyền root..."
@@ -11,40 +24,46 @@ echo "Đang chạy với quyền root..."
 
 # 2. Xác định thư mục hiện tại một cách chính xác
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
-cd "$SCRIPT_DIR"
+cd "$SCRIPT_DIR" || error_exit "Không thể chuyển đến thư mục script"
 CURRENT_DIR="$(pwd)"
 echo "Thư mục hiện tại: $CURRENT_DIR"
 
 # Cập nhật và cài đặt các gói cần thiết
 echo "Cập nhật và cài đặt các gói cần thiết..."
-apt update -y
-apt install -y python3-pip python3-flask python3-apscheduler cron systemd curl lsof
+apt update -y || error_exit "Không thể cập nhật gói"
+apt install -y python3-pip python3-flask python3-apscheduler cron systemd curl lsof || error_exit "Không thể cài đặt các gói cần thiết"
 
 # Cài đặt gunicorn và pytubefix
 echo "Đang cài đặt gunicorn và pytubefix..."
-pip3 install --break-system-packages gunicorn pytubefix
+pip3 install --break-system-packages gunicorn pytubefix || error_exit "Không thể cài đặt gunicorn và pytubefix"
 
 # Tạo thư mục templates và file index.html
 echo "Tạo thư mục templates và file index.html..."
-mkdir -p templates
+mkdir -p templates || error_exit "Không thể tạo thư mục templates"
 curl -s https://raw.githubusercontent.com/tube22032025/tube/refs/heads/main/index.html > templates/index.html
+check_command "Không thể tải file index.html"
 
 # Tạo file templates/404.html
 echo "<h1>404 Not Found</h1><p>Trang bạn yêu cầu không tồn tại.</p>" > templates/404.html
+check_command "Không thể tạo file 404.html"
 
 # Tạo file youtube.py nếu chưa tồn tại
 if [ ! -f "$CURRENT_DIR/youtube.py" ]; then
     echo "Tạo file youtube.py..."
     curl -s https://raw.githubusercontent.com/tube22032025/tube/refs/heads/main/tube.py -o "$CURRENT_DIR/youtube.py"
+    check_command "Không thể tải file youtube.py"
 else
     echo "File youtube.py đã tồn tại, đang cập nhật..."
     curl -s https://raw.githubusercontent.com/tube22032025/tube/refs/heads/main/tube.py -o "$CURRENT_DIR/youtube.py.new"
+    check_command "Không thể tải bản cập nhật của youtube.py"
     mv "$CURRENT_DIR/youtube.py.new" "$CURRENT_DIR/youtube.py"
+    check_command "Không thể cập nhật youtube.py"
 fi
 
 # Đảm bảo file có quyền thực thi
 echo "Cấp quyền thực thi cho file..."
 chmod +x "$CURRENT_DIR/youtube.py"
+check_command "Không thể cấp quyền thực thi cho youtube.py"
 
 # Tạo file dịch vụ systemd cho gunicorn với vị trí chính xác
 SERVICE_FILE="/etc/systemd/system/youtube.service"
@@ -67,33 +86,67 @@ RestartSec=5
 [Install]
 WantedBy=multi-user.target
 EOL
+check_command "Không thể tạo file dịch vụ systemd"
 
 # Reload systemd để nhận cấu hình mới
 echo "Reload systemd để nhận cấu hình mới..."
 systemctl daemon-reload
+check_command "Không thể reload systemd"
 
 # Kích hoạt dịch vụ gunicorn với kiểm tra port 80
 echo "Kích hoạt dịch vụ gunicorn..."
 
 # Kiểm tra xem cổng 80 có đang được sử dụng không và dừng dịch vụ nếu cần thiết
-if lsof -i :80; then
+if lsof -i :80 &>/dev/null; then
     echo "Cổng 80 đang được sử dụng. Đang dừng dịch vụ..."
-    fuser -k 80/tcp # Dừng tất cả các tiến trình đang sử dụng cổng 80
+    fuser -k 80/tcp &>/dev/null # Dừng tất cả các tiến trình đang sử dụng cổng 80
+    sleep 2 # Đợi để đảm bảo port được giải phóng
 fi
 
 systemctl enable youtube.service
+check_command "Không thể kích hoạt dịch vụ youtube"
 
 # Chạy youtube.py lần đầu để cài đặt sau khi cài đặt dịch vụ hoàn tất.
 echo "Chạy youtube.py lần đầu để cài đặt..."
-cd "$CURRENT_DIR"
-python3 youtube.py &
+cd "$CURRENT_DIR" || error_exit "Không thể chuyển đến thư mục hiện tại"
+python3 youtube.py > youtube_output.log 2>&1 &
 PID=$!
-sleep 5
+echo "Đang đợi ứng dụng khởi động và tạo mã kết nối..."
+sleep 15  # Tăng thời gian chờ để đảm bảo ứng dụng có đủ thời gian khởi động và tạo mã
 
-# Thông báo cho người dùng về việc nhập mã kết nối Google.
-CODE=$(grep -oP 'code \K\w{4}-\w{4}-\w{4}' <<< "$(tail -n 10 $CURRENT_DIR/youtube.log)") # Giả định rằng mã kết nối được ghi vào log.
+# Tìm kiếm mã kết nối trong nhiều định dạng và nguồn khác nhau
+find_code() {
+    local log_file=$1
+    local code=""
+    
+    # Tìm kiếm các mẫu phổ biến của mã kết nối
+    code=$(grep -o "nhập mã kết nối.*" "$log_file" 2>/dev/null | grep -o "[A-Z0-9]\{4\}-[A-Z0-9]\{4\}" | head -1)
+    
+    if [[ -z $code ]]; then
+        code=$(grep -o "code [A-Z0-9]\{4\}-[A-Z0-9]\{4\}" "$log_file" 2>/dev/null | awk '{print $2}' | head -1)
+    fi
+    
+    if [[ -z $code ]]; then
+        code=$(grep -o "[A-Z0-9]\{4\}-[A-Z0-9]\{4\}" "$log_file" 2>/dev/null | head -1)
+    fi
+    
+    echo "$code"
+}
+
+# Tìm mã kết nối từ các nguồn khác nhau
+CODE=$(find_code "youtube_output.log")
+
+if [[ -z $CODE ]] && [[ -f "$CURRENT_DIR/youtube.log" ]]; then
+    CODE=$(find_code "$CURRENT_DIR/youtube.log")
+fi
+
 if [[ -z $CODE ]]; then 
-    CODE="Mã không tìm thấy, vui lòng kiểm tra lại."
+    echo ""
+    echo "Không tìm thấy mã kết nối trong log. Đang hiển thị nội dung log để bạn có thể tìm mã:"
+    echo "-----------------------------------"
+    cat youtube_output.log | tail -n 20
+    echo "-----------------------------------"
+    echo "Vui lòng tìm mã kết nối có định dạng XXXX-XXXX trong log trên."
 else 
     echo ""
     echo "Vui lòng mở https://www.google.com/device và nhập mã kết nối để kết nối Google."
@@ -101,8 +154,9 @@ else
     echo ""
 fi
 
-echo "Sau đó, truy cập http://$(hostname -I | awk '{print $1}'):80 để nhập mã."
+echo "Sau khi nhập mã, truy cập http://$(hostname -I | awk '{print $1}'):80 để sử dụng ứng dụng."
 
+# Dừng tiến trình youtube.py đang chạy
 if ps -p $PID > /dev/null; then
     kill $PID
     echo "Đã chạy và dừng youtube.py thành công."
@@ -111,7 +165,9 @@ else
 fi
 
 # Khởi động dịch vụ gunicorn sau khi chạy youtube.py lần đầu.
+echo "Khởi động dịch vụ gunicorn..."
 systemctl start youtube.service
+check_command "Không thể khởi động dịch vụ youtube"
 
 # Kiểm tra trạng thái dịch vụ
 echo "Kiểm tra trạng thái dịch vụ..."
@@ -123,13 +179,14 @@ if [ ! -f "$RC_LOCAL" ]; then
     echo "Tạo file rc.local..."
     cat > "$RC_LOCAL" << EOL
 #!/bin/bash
-if lsof -i :80; then
+if lsof -i :80 &>/dev/null; then
     fuser -k 80/tcp # Dừng tất cả các tiến trình đang sử dụng cổng 80 trước khi khởi động lại Gunicorn.
 fi
 systemctl start youtube.service
 exit 0
 EOL
     chmod +x "$RC_LOCAL"
+    check_command "Không thể tạo file rc.local"
 else
     if ! grep -q "systemctl start youtube.service" "$RC_LOCAL"; then
         # Thêm lệnh trước dòng "exit 0" nếu có
@@ -141,12 +198,14 @@ else
             echo "exit 0" >> "$RC_LOCAL"
         fi
         chmod +x "$RC_LOCAL"
+        check_command "Không thể cập nhật file rc.local"
     fi
 fi
 
 # Thêm vào crontab để khởi động lại dịch vụ khi reboot (phương án dự phòng)
 echo "Thêm vào crontab để khởi động lại dịch vụ khi reboot..."
-(crontab -l 2>/dev/null | grep -v "youtube.service"; echo "@reboot if lsof -i :80; then fuser -k 80/tcp; fi; systemctl start youtube.service") | crontab -
+(crontab -l 2>/dev/null | grep -v "youtube.service"; echo "@reboot if lsof -i :80 &>/dev/null; then fuser -k 80/tcp; fi; systemctl start youtube.service") | crontab -
+check_command "Không thể cập nhật crontab"
 
 # Kiểm tra crontab đã được cấu hình
 echo "Crontab đã được cấu hình:"
