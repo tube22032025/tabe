@@ -3,7 +3,7 @@
 # Kiểm tra và chuyển sang quyền root nếu cần
 if [ "$(id -u)" != "0" ]; then
    echo "Chuyển sang quyền root..."
-   exec sudo su -c "$0"
+   exec sudo "$0"
    exit
 fi
 
@@ -21,20 +21,42 @@ echo "Đang cài đặt gunicorn..."
 pip install --break-system-packages gunicorn
 
 echo "Đang cài đặt pytubefix..."
-pip install pytubefix --break-system-packages
+pip install --break-system-packages pytubefix
 
 # Tạo file youtube.py
 echo "Tạo file youtube.py..."
-curl -s https://raw.githubusercontent.com/tube22032025/tube/refs/heads/main/tube.py > youtube.py
+curl -s https://raw.githubusercontent.com/tube22032025/tube/refs/heads/main/tube.py -o youtube.py
 
 # Đảm bảo file có quyền thực thi
 echo "Cấp quyền thực thi cho file..."
 chmod +x youtube.py
 
-# Tạo thư mục templates và file index.html
-echo "Tạo thư mục templates và file index.html..."
-mkdir -p templates
-curl -s https://raw.githubusercontent.com/tube22032025/tube/refs/heads/main/index.html > templates/index.html
+# Tạo thư mục templates nếu chưa tồn tại và kiểm tra tệp 404.html
+TEMPLATES_DIR="$CURRENT_DIR/templates"
+if [ ! -d "$TEMPLATES_DIR" ]; then
+    echo "Thư mục templates không tồn tại. Đang tạo thư mục..."
+    mkdir -p "$TEMPLATES_DIR"
+fi
+
+if [ ! -f "$TEMPLATES_DIR/404.html" ]; then
+    echo "Tệp 404.html không tồn tại trong thư mục templates. Đang tạo tệp 404.html..."
+    cat > "$TEMPLATES_DIR/404.html" << EOL
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>404 Not Found</title>
+</head>
+<body>
+    <h1>404 Not Found</h1>
+    <p>The page you are looking for does not exist.</p>
+</body>
+</html>
+EOL
+else
+    echo "Tệp 404.html đã tồn tại trong thư mục templates."
+fi
 
 # Thêm shebang vào đầu file youtube.py nếu chưa có
 if ! grep -q "^#!/usr/bin/python3" youtube.py; then
@@ -42,10 +64,10 @@ if ! grep -q "^#!/usr/bin/python3" youtube.py; then
     echo "Đã thêm shebang vào youtube.py"
 fi
 
-# Cấu hình crontab với đường dẫn đầy đủ
+# Cấu hình crontab với đường dẫn đầy đủ đến youtube.py
 echo "Cấu hình crontab với đường dẫn: $CURRENT_DIR"
-(crontab -l 2>/dev/null | grep -v "youtube.py"; echo "@reboot /usr/local/bin/gunicorn --workers 4 --bind 0.0.0.0:80 youtube:app >> /root/youtube_cron.log 2>&1") | crontab -
-(crontab -l 2>/dev/null | grep -v "test_cron.sh"; echo "* * * * * /root/test_cron.sh") | crontab -
+(crontab -l 2>/dev/null | grep -v "youtube.py"; echo "@reboot /usr/local/bin/gunicorn --workers 4 --bind 0.0.0.0:80 $CURRENT_DIR/youtube.py:app >> /root/youtube_cron.log 2>&1") | crontab -
+(crontab -l 2>/dev/null | grep -v "test_cron.sh"; echo "* * * * * $CURRENT_DIR/test_cron.sh") | crontab -
 
 # Kiểm tra crontab
 echo "Crontab đã được cấu hình:"
@@ -79,9 +101,4 @@ echo "Cron test executed at \$(date)" >> $CURRENT_DIR/cron_test.log
 EOL
 chmod +x test_cron.sh
 
-# Chạy gunicorn ngay lập tức cho lần cài đặt đầu tiên
-echo "Chạy gunicorn với 4 workers trên 0.0.0.0:80..."
-/usr/local/bin/gunicorn --workers 4 --bind 0.0.0.0:80 youtube:app &
-
 echo "Đã thêm test cron job. Kiểm tra file cron_test.log sau 1 phút để xác nhận cron đang hoạt động."
-
