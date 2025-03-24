@@ -1,84 +1,37 @@
 #!/bin/bash
 
-# Kiểm tra và chuyển sang quyền root nếu cần
+# Check and switch to root privileges if needed
 if [ "$(id -u)" != "0" ]; then
-   echo "Chuyển sang quyền root..."
-   exec sudo su -c "$0"
-   exit
+    echo "Switching to root..."
+    exec sudo su -c "$0"
+    exit
 fi
 
-# Hàm xử lý lỗi
-handle_error() {
-    local exit_code=$1
-    local error_message=$2
-    if [ $exit_code -ne 0 ]; then
-        echo "LỖI: $error_message" >&2
-        exit $exit_code
-    fi
-}
-
-# Cập nhật và cài đặt các gói cần thiết
-echo "Cập nhật hệ thống..."
+# Update and install necessary packages
 apt update
-handle_error $? "Không thể cập nhật hệ thống"
+apt install -y python3-pip python3-flask python3-apscheduler cron
 
-echo "Cài đặt các gói cần thiết..."
-apt install -y python3-pip python3-flask python3-apscheduler cron lsof
-handle_error $? "Không thể cài đặt các gói cần thiết"
+# Install gunicorn
+echo "Installing gunicorn..."
+pip install --break-system-packages gunicorn
 
-# Cài đặt pytubefix và gunicorn
-echo "Cài đặt pytubefix và gunicorn..."
+# Install pytubefix
+echo "Installing pytubefix..."
 pip install pytubefix --break-system-packages
-handle_error $? "Không thể cài đặt pytubefix"
-pip install gunicorn --break-system-packages
-handle_error $? "Không thể cài đặt gunicorn"
 
-# Tạo file youtube.py
-echo "Tạo file youtube.py..."
+# Create youtube.py file
+echo "Creating youtube.py..."
 curl -s https://raw.githubusercontent.com/tube22032025/tube/refs/heads/main/tube.py > youtube.py
-handle_error $? "Không thể tải file tube.py"
 
-# Tạo thư mục templates và file index.html
-echo "Tạo thư mục templates và file index.html..."
+# Create templates directory and index.html file
+echo "Creating templates directory and index.html..."
 mkdir -p templates
-handle_error $? "Không thể tạo thư mục templates"
 curl -s https://raw.githubusercontent.com/tube22032025/tube/refs/heads/main/index.html > templates/index.html
-handle_error $? "Không thể tải file index.html"
 
-# Tạo file test_cron.sh
-echo "Tạo file test_cron.sh..."
-cat > /root/test_cron.sh << 'EOL'
-#!/bin/bash
-# Kiểm tra xem Gunicorn có đang chạy không
-if ! pgrep -f "gunicorn.*youtube:app" > /dev/null; then
-    echo "$(date): Gunicorn không chạy. Đang khởi động lại..." >> /root/youtube_cron.log
-    fuser -k 80/tcp 2>/dev/null
-    /usr/local/bin/gunicorn --workers 4 --bind 0.0.0.0:80 youtube:app >> /root/youtube_cron.log 2>&1 &
-fi
-EOL
-chmod +x /root/test_cron.sh
-handle_error $? "Không thể tạo hoặc cấp quyền cho file test_cron.sh"
+# Configure crontab
+echo "Configuring crontab..."
+(crontab -l 2>/dev/null | grep -v "youtube.py"; echo "@reboot /usr/bin/python3 /root/youtube.py") | crontab -
 
-# Cấu hình crontab - chỉ chạy Gunicorn khi khởi động lại
-echo "Cấu hình crontab..."
-(crontab -l 2>/dev/null | grep -v "youtube\|gunicorn"; 
-echo "@reboot /usr/local/bin/gunicorn --workers 4 --bind 0.0.0.0:80 youtube:app >> /root/youtube_cron.log 2>&1"; 
-echo "* * * * * /root/test_cron.sh") | crontab -
-handle_error $? "Không thể cấu hình crontab"
-
-# Kiểm tra và giải phóng cổng 80 nếu đã được sử dụng
-echo "Kiểm tra cổng 80..."
-if lsof -i :80 > /dev/null 2>&1; then
-    echo "Cổng 80 đang được sử dụng. Đang giải phóng..."
-    fuser -k 80/tcp
-    sleep 2
-fi
-
-# Lần đầu tiên chạy python3 youtube.py
-echo "Chạy youtube.py..."
+# Run youtube.py
+echo "Running youtube.py..."
 python3 youtube.py
-handle_error $? "Không thể chạy youtube.py"
-
-echo "Cài đặt hoàn tất! Ứng dụng đang chạy."
-echo "Khi khởi động lại VPS, Gunicorn sẽ tự động chạy trên cổng 80."
-echo "Kiểm tra log tại: /root/youtube_cron.log"
