@@ -92,7 +92,7 @@ User=root
 Group=www-data
 WorkingDirectory=$CURRENT_DIR
 Environment="PATH=/usr/bin:/usr/local/bin"
-ExecStart=/usr/local/bin/gunicorn --workers 4 --bind 0.0.0.0:80 --timeout 120 youtube:app
+ExecStart=/usr/local/bin/gunicorn --workers 4 --bind 0.0.0.0:80 --timeout 300 youtube:app
 Restart=always
 RestartSec=5
 
@@ -128,29 +128,56 @@ touch youtube_output.log
 python3 youtube.py > youtube_output.log 2>&1 &
 PID=$!
 echo "Đang đợi ứng dụng khởi động và tạo mã kết nối..."
-sleep 20  # Tăng thời gian chờ để đảm bảo ứng dụng có đủ thời gian khởi động và tạo mã
+
+# Đợi ứng dụng khởi động
+sleep 10
+
+# Kiểm tra log để xem ứng dụng đã khởi động chưa
+if grep -q "Running on http" youtube_output.log; then
+    echo "Ứng dụng đã khởi động thành công."
+else
+    echo "Đang đợi ứng dụng khởi động..."
+    sleep 10
+fi
 
 # Hiển thị log để người dùng có thể xem
 echo "Nội dung log của ứng dụng:"
 cat youtube_output.log
 
 # Tìm kiếm mã kết nối trong output
-CODE=$(grep -o "[A-Z0-9]\{4\}-[A-Z0-9]\{4\}" youtube_output.log | head -1)
+CODE=""
+for pattern in "code [A-Z0-9]\{4\}-[A-Z0-9]\{4\}" "nhập mã kết nối.*[A-Z0-9]\{4\}-[A-Z0-9]\{4\}" "[A-Z0-9]\{4\}-[A-Z0-9]\{4\}"; do
+    CODE=$(grep -o "$pattern" youtube_output.log | grep -o "[A-Z0-9]\{4\}-[A-Z0-9]\{4\}" | head -1)
+    if [[ ! -z $CODE ]]; then
+        break
+    fi
+done
 
-if [[ -z $CODE ]]; then
-    # Thử tìm trong log của Flask
-    CODE=$(grep -o "code [A-Z0-9]\{4\}-[A-Z0-9]\{4\}" youtube_output.log | awk '{print $2}' | head -1)
-fi
-
+# Nếu không tìm thấy trong youtube_output.log, thử tìm trong youtube.log
 if [[ -z $CODE ]] && [[ -f "$CURRENT_DIR/youtube.log" ]]; then
-    # Thử tìm trong file youtube.log nếu nó tồn tại
-    CODE=$(grep -o "[A-Z0-9]\{4\}-[A-Z0-9]\{4\}" "$CURRENT_DIR/youtube.log" | head -1)
+    for pattern in "code [A-Z0-9]\{4\}-[A-Z0-9]\{4\}" "nhập mã kết nối.*[A-Z0-9]\{4\}-[A-Z0-9]\{4\}" "[A-Z0-9]\{4\}-[A-Z0-9]\{4\}"; do
+        CODE=$(grep -o "$pattern" "$CURRENT_DIR/youtube.log" | grep -o "[A-Z0-9]\{4\}-[A-Z0-9]\{4\}" | head -1)
+        if [[ ! -z $CODE ]]; then
+            break
+        fi
+    done
 fi
 
 if [[ -z $CODE ]]; then 
     echo ""
     echo "Không tìm thấy mã kết nối trong log. Vui lòng kiểm tra log ở trên và tìm mã có định dạng XXXX-XXXX."
     echo "Mã này thường xuất hiện sau dòng 'Vui lòng mở https://www.google.com/device và nhập mã kết nối'."
+    
+    # Hiển thị thêm nội dung từ youtube.log nếu có
+    if [[ -f "$CURRENT_DIR/youtube.log" ]]; then
+        echo "Nội dung từ youtube.log:"
+        cat "$CURRENT_DIR/youtube.log"
+    fi
+    
+    # Yêu cầu người dùng nhập mã thủ công
+    echo ""
+    echo "Vui lòng nhập mã kết nối bạn thấy trong log (định dạng XXXX-XXXX):"
+    read -r CODE
 else 
     echo ""
     echo "============================================================="
@@ -160,7 +187,12 @@ else
     echo ""
 fi
 
+# Hiển thị hướng dẫn và đợi người dùng xác nhận
 echo "Sau khi nhập mã tại https://www.google.com/device, truy cập http://$(hostname -I | awk '{print $1}'):80 để sử dụng ứng dụng."
+echo ""
+echo "QUAN TRỌNG: Đừng đóng terminal này cho đến khi bạn đã nhập mã và xác thực thành công."
+echo "Nhấn Enter sau khi bạn đã nhập mã và xác thực thành công để tiếp tục cài đặt..."
+read -r CONFIRMATION
 
 # Dừng tiến trình youtube.py đang chạy
 if ps -p $PID > /dev/null; then
