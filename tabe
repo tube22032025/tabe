@@ -246,8 +246,18 @@ fi
 echo "Sau khi nhập mã tại https://www.google.com/device, truy cập http://${IP_ADDRESS}:80 để sử dụng ứng dụng."
 echo ""
 echo "QUAN TRỌNG: Đừng đóng terminal này cho đến khi bạn đã nhập mã và xác thực thành công."
-echo "Nhấn Enter sau khi bạn đã nhập mã và xác thực thành công để tiếp tục cài đặt..."
-read -r CONFIRMATION
+echo "Nhập 'honglee' sau khi bạn đã nhập mã và xác thực thành công để tiếp tục cài đặt..."
+
+# Đợi người dùng nhập "honglee" để xác nhận đã xác thực thành công
+while true; do
+    read -r CONFIRMATION
+    if [[ "$CONFIRMATION" == "honglee" ]]; then
+        echo "Xác nhận thành công! Tiếp tục quá trình cài đặt..."
+        break
+    else
+        echo "Vui lòng nhập 'honglee' để xác nhận bạn đã xác thực thành công:"
+    fi
+done
 
 # Dừng tiến trình youtube.py đang chạy
 if ps -p $PID > /dev/null; then
