@@ -47,7 +47,7 @@ check_command "Không thể tải file index.html"
 echo "<h1>404 Not Found</h1><p>Trang bạn yêu cầu không tồn tại.</p>" > templates/404.html
 check_command "Không thể tạo file 404.html"
 
-# Tạo file youtube.py nếu chưa tồn tại
+# Tạo hoặc sửa đổi file youtube.py để xử lý lỗi EOF
 if [ ! -f "$CURRENT_DIR/youtube.py" ]; then
     echo "Tạo file youtube.py..."
     curl -s https://raw.githubusercontent.com/tube22032025/tube/refs/heads/main/tube.py -o "$CURRENT_DIR/youtube.py"
@@ -58,6 +58,19 @@ else
     check_command "Không thể tải bản cập nhật của youtube.py"
     mv "$CURRENT_DIR/youtube.py.new" "$CURRENT_DIR/youtube.py"
     check_command "Không thể cập nhật youtube.py"
+fi
+
+# Sửa lỗi EOF khi đọc input trong youtube.py
+echo "Sửa lỗi EOF khi đọc input trong youtube.py..."
+if grep -q "input(" "$CURRENT_DIR/youtube.py"; then
+    # Tạo bản sao lưu
+    cp "$CURRENT_DIR/youtube.py" "$CURRENT_DIR/youtube.py.bak"
+    
+    # Thay thế hàm input() bằng sys.stdin.read() để tránh lỗi EOF
+    sed -i 's/input("Enter verification code: ")/sys.stdin.read().strip()/g' "$CURRENT_DIR/youtube.py"
+    sed -i '1s/^/import sys\n/' "$CURRENT_DIR/youtube.py"
+    
+    echo "Đã sửa lỗi EOF trong file youtube.py"
 fi
 
 # Đảm bảo file có quyền thực thi
@@ -79,7 +92,7 @@ User=root
 Group=www-data
 WorkingDirectory=$CURRENT_DIR
 Environment="PATH=/usr/bin:/usr/local/bin"
-ExecStart=/usr/local/bin/gunicorn --workers 4 --bind 0.0.0.0:80 youtube:app
+ExecStart=/usr/local/bin/gunicorn --workers 4 --bind 0.0.0.0:80 --timeout 120 youtube:app
 Restart=always
 RestartSec=5
 
@@ -106,55 +119,48 @@ fi
 systemctl enable youtube.service
 check_command "Không thể kích hoạt dịch vụ youtube"
 
-# Chạy youtube.py lần đầu để cài đặt sau khi cài đặt dịch vụ hoàn tất.
-echo "Chạy youtube.py lần đầu để cài đặt..."
+# Chạy youtube.py lần đầu để cài đặt và lấy mã xác thực
+echo "Chạy youtube.py lần đầu để cài đặt và lấy mã xác thực..."
 cd "$CURRENT_DIR" || error_exit "Không thể chuyển đến thư mục hiện tại"
+
+# Tạo file tạm để lưu output
+touch youtube_output.log
 python3 youtube.py > youtube_output.log 2>&1 &
 PID=$!
 echo "Đang đợi ứng dụng khởi động và tạo mã kết nối..."
-sleep 15  # Tăng thời gian chờ để đảm bảo ứng dụng có đủ thời gian khởi động và tạo mã
+sleep 20  # Tăng thời gian chờ để đảm bảo ứng dụng có đủ thời gian khởi động và tạo mã
 
-# Tìm kiếm mã kết nối trong nhiều định dạng và nguồn khác nhau
-find_code() {
-    local log_file=$1
-    local code=""
-    
-    # Tìm kiếm các mẫu phổ biến của mã kết nối
-    code=$(grep -o "nhập mã kết nối.*" "$log_file" 2>/dev/null | grep -o "[A-Z0-9]\{4\}-[A-Z0-9]\{4\}" | head -1)
-    
-    if [[ -z $code ]]; then
-        code=$(grep -o "code [A-Z0-9]\{4\}-[A-Z0-9]\{4\}" "$log_file" 2>/dev/null | awk '{print $2}' | head -1)
-    fi
-    
-    if [[ -z $code ]]; then
-        code=$(grep -o "[A-Z0-9]\{4\}-[A-Z0-9]\{4\}" "$log_file" 2>/dev/null | head -1)
-    fi
-    
-    echo "$code"
-}
+# Hiển thị log để người dùng có thể xem
+echo "Nội dung log của ứng dụng:"
+cat youtube_output.log
 
-# Tìm mã kết nối từ các nguồn khác nhau
-CODE=$(find_code "youtube_output.log")
+# Tìm kiếm mã kết nối trong output
+CODE=$(grep -o "[A-Z0-9]\{4\}-[A-Z0-9]\{4\}" youtube_output.log | head -1)
+
+if [[ -z $CODE ]]; then
+    # Thử tìm trong log của Flask
+    CODE=$(grep -o "code [A-Z0-9]\{4\}-[A-Z0-9]\{4\}" youtube_output.log | awk '{print $2}' | head -1)
+fi
 
 if [[ -z $CODE ]] && [[ -f "$CURRENT_DIR/youtube.log" ]]; then
-    CODE=$(find_code "$CURRENT_DIR/youtube.log")
+    # Thử tìm trong file youtube.log nếu nó tồn tại
+    CODE=$(grep -o "[A-Z0-9]\{4\}-[A-Z0-9]\{4\}" "$CURRENT_DIR/youtube.log" | head -1)
 fi
 
 if [[ -z $CODE ]]; then 
     echo ""
-    echo "Không tìm thấy mã kết nối trong log. Đang hiển thị nội dung log để bạn có thể tìm mã:"
-    echo "-----------------------------------"
-    cat youtube_output.log | tail -n 20
-    echo "-----------------------------------"
-    echo "Vui lòng tìm mã kết nối có định dạng XXXX-XXXX trong log trên."
+    echo "Không tìm thấy mã kết nối trong log. Vui lòng kiểm tra log ở trên và tìm mã có định dạng XXXX-XXXX."
+    echo "Mã này thường xuất hiện sau dòng 'Vui lòng mở https://www.google.com/device và nhập mã kết nối'."
 else 
     echo ""
+    echo "============================================================="
     echo "Vui lòng mở https://www.google.com/device và nhập mã kết nối để kết nối Google."
     echo "Mã kết nối: $CODE"
+    echo "============================================================="
     echo ""
 fi
 
-echo "Sau khi nhập mã, truy cập http://$(hostname -I | awk '{print $1}'):80 để sử dụng ứng dụng."
+echo "Sau khi nhập mã tại https://www.google.com/device, truy cập http://$(hostname -I | awk '{print $1}'):80 để sử dụng ứng dụng."
 
 # Dừng tiến trình youtube.py đang chạy
 if ps -p $PID > /dev/null; then
