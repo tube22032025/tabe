@@ -124,71 +124,126 @@ echo "Chạy youtube.py lần đầu để cài đặt và lấy mã xác thực
 cd "$CURRENT_DIR" || error_exit "Không thể chuyển đến thư mục hiện tại"
 
 # Tạo file tạm để lưu output
+rm -f youtube_output.log
 touch youtube_output.log
+
+# Chạy ứng dụng trong nền và lưu PID
 python3 youtube.py > youtube_output.log 2>&1 &
 PID=$!
 echo "Đang đợi ứng dụng khởi động và tạo mã kết nối..."
 
 # Đợi ứng dụng khởi động
-sleep 10
+sleep 5
 
-# Kiểm tra log để xem ứng dụng đã khởi động chưa
-if grep -q "Running on http" youtube_output.log; then
-    echo "Ứng dụng đã khởi động thành công."
-else
-    echo "Đang đợi ứng dụng khởi động..."
-    sleep 10
+# Kiểm tra xem ứng dụng đã khởi động chưa
+MAX_ATTEMPTS=30
+ATTEMPT=0
+while [ $ATTEMPT -lt $MAX_ATTEMPTS ]; do
+    if grep -q "Running on http" youtube_output.log; then
+        echo "Ứng dụng đã khởi động thành công."
+        break
+    fi
+    echo "Đang đợi ứng dụng khởi động... (${ATTEMPT}/${MAX_ATTEMPTS})"
+    ATTEMPT=$((ATTEMPT+1))
+    sleep 2
+done
+
+if [ $ATTEMPT -eq $MAX_ATTEMPTS ]; then
+    echo "Không thể khởi động ứng dụng sau nhiều lần thử. Vui lòng kiểm tra log."
+    cat youtube_output.log
+    error_exit "Khởi động ứng dụng thất bại"
 fi
 
-# Hiển thị log để người dùng có thể xem
-echo "Nội dung log của ứng dụng:"
-cat youtube_output.log
+# Hiển thị địa chỉ IP và port
+IP_ADDRESS=$(hostname -I | awk '{print $1}')
+echo "Ứng dụng đang chạy tại: http://${IP_ADDRESS}:80"
 
-# Tìm kiếm mã kết nối trong output
+# Hàm tìm mã kết nối
+find_auth_code() {
+    local log_file=$1
+    local code=""
+    
+    # Tìm kiếm các mẫu phổ biến của mã kết nối
+    code=$(grep -o "nhập mã kết nối.*" "$log_file" 2>/dev/null | grep -o "[A-Z0-9]\{4\}-[A-Z0-9]\{4\}" | head -1)
+    
+    if [[ -z $code ]]; then
+        code=$(grep -o "code [A-Z0-9]\{4\}-[A-Z0-9]\{4\}" "$log_file" 2>/dev/null | awk '{print $2}' | head -1)
+    fi
+    
+    if [[ -z $code ]]; then
+        code=$(grep -o "[A-Z0-9]\{4\}-[A-Z0-9]\{4\}" "$log_file" 2>/dev/null | head -1)
+    fi
+    
+    echo "$code"
+}
+
+# Đợi và tìm mã kết nối
+echo "Đang đợi mã kết nối Google xuất hiện..."
 CODE=""
-for pattern in "code [A-Z0-9]\{4\}-[A-Z0-9]\{4\}" "nhập mã kết nối.*[A-Z0-9]\{4\}-[A-Z0-9]\{4\}" "[A-Z0-9]\{4\}-[A-Z0-9]\{4\}"; do
-    CODE=$(grep -o "$pattern" youtube_output.log | grep -o "[A-Z0-9]\{4\}-[A-Z0-9]\{4\}" | head -1)
+MAX_AUTH_ATTEMPTS=60
+AUTH_ATTEMPT=0
+
+while [ $AUTH_ATTEMPT -lt $MAX_AUTH_ATTEMPTS ]; do
+    # Kiểm tra trong youtube_output.log
+    CODE=$(find_auth_code "youtube_output.log")
+    
+    # Nếu không tìm thấy, kiểm tra trong youtube.log
+    if [[ -z $CODE ]] && [[ -f "$CURRENT_DIR/youtube.log" ]]; then
+        CODE=$(find_auth_code "$CURRENT_DIR/youtube.log")
+    fi
+    
+    # Nếu tìm thấy mã, hiển thị và thoát khỏi vòng lặp
     if [[ ! -z $CODE ]]; then
+        echo ""
+        echo "============================================================="
+        echo "Vui lòng mở https://www.google.com/device và nhập mã kết nối để kết nối Google."
+        echo "Mã kết nối: $CODE"
+        echo "============================================================="
+        echo ""
         break
+    fi
+    
+    # Nếu không tìm thấy, đợi và thử lại
+    echo "Đang đợi mã kết nối xuất hiện... (${AUTH_ATTEMPT}/${MAX_AUTH_ATTEMPTS})"
+    AUTH_ATTEMPT=$((AUTH_ATTEMPT+1))
+    sleep 2
+    
+    # Hiển thị log mới nhất
+    if [ $((AUTH_ATTEMPT % 5)) -eq 0 ]; then
+        echo "Log mới nhất:"
+        tail -n 5 youtube_output.log
+        if [[ -f "$CURRENT_DIR/youtube.log" ]]; then
+            tail -n 5 "$CURRENT_DIR/youtube.log"
+        fi
     fi
 done
 
-# Nếu không tìm thấy trong youtube_output.log, thử tìm trong youtube.log
-if [[ -z $CODE ]] && [[ -f "$CURRENT_DIR/youtube.log" ]]; then
-    for pattern in "code [A-Z0-9]\{4\}-[A-Z0-9]\{4\}" "nhập mã kết nối.*[A-Z0-9]\{4\}-[A-Z0-9]\{4\}" "[A-Z0-9]\{4\}-[A-Z0-9]\{4\}"; do
-        CODE=$(grep -o "$pattern" "$CURRENT_DIR/youtube.log" | grep -o "[A-Z0-9]\{4\}-[A-Z0-9]\{4\}" | head -1)
-        if [[ ! -z $CODE ]]; then
-            break
-        fi
-    done
-fi
-
-if [[ -z $CODE ]]; then 
+# Nếu không tìm thấy mã sau nhiều lần thử
+if [[ -z $CODE ]]; then
     echo ""
-    echo "Không tìm thấy mã kết nối trong log. Vui lòng kiểm tra log ở trên và tìm mã có định dạng XXXX-XXXX."
-    echo "Mã này thường xuất hiện sau dòng 'Vui lòng mở https://www.google.com/device và nhập mã kết nối'."
-    
-    # Hiển thị thêm nội dung từ youtube.log nếu có
+    echo "Không tìm thấy mã kết nối trong log sau nhiều lần thử."
+    echo "Hiển thị nội dung log đầy đủ:"
+    echo "-----------------------------------"
+    cat youtube_output.log
     if [[ -f "$CURRENT_DIR/youtube.log" ]]; then
-        echo "Nội dung từ youtube.log:"
+        echo "-----------------------------------"
+        echo "Nội dung youtube.log:"
         cat "$CURRENT_DIR/youtube.log"
     fi
+    echo "-----------------------------------"
     
     # Yêu cầu người dùng nhập mã thủ công
     echo ""
     echo "Vui lòng nhập mã kết nối bạn thấy trong log (định dạng XXXX-XXXX):"
     read -r CODE
-else 
-    echo ""
-    echo "============================================================="
-    echo "Vui lòng mở https://www.google.com/device và nhập mã kết nối để kết nối Google."
-    echo "Mã kết nối: $CODE"
-    echo "============================================================="
-    echo ""
+    
+    if [[ -z $CODE ]]; then
+        error_exit "Không có mã kết nối, không thể tiếp tục."
+    fi
 fi
 
 # Hiển thị hướng dẫn và đợi người dùng xác nhận
-echo "Sau khi nhập mã tại https://www.google.com/device, truy cập http://$(hostname -I | awk '{print $1}'):80 để sử dụng ứng dụng."
+echo "Sau khi nhập mã tại https://www.google.com/device, truy cập http://${IP_ADDRESS}:80 để sử dụng ứng dụng."
 echo ""
 echo "QUAN TRỌNG: Đừng đóng terminal này cho đến khi bạn đã nhập mã và xác thực thành công."
 echo "Nhấn Enter sau khi bạn đã nhập mã và xác thực thành công để tiếp tục cài đặt..."
@@ -251,5 +306,5 @@ crontab -l
 
 echo "==================================================="
 echo "Cài đặt hoàn tất. Dịch vụ youtube đã được cấu hình để tự khởi động khi VPS khởi động."
-echo "Dịch vụ đang chạy tại địa chỉ: http://$(hostname -I | awk '{print $1}'):80"
+echo "Dịch vụ đang chạy tại địa chỉ: http://${IP_ADDRESS}:80"
 echo "==================================================="
